@@ -66,8 +66,10 @@ export class PlayerModel {
    * 时长兜底：AVPlayer 对 Jellyfin 转码流返回的 duration 不可靠（实测出现过 134217400 的垃圾值），
    * 不合理时改用曲目自带的 durationMs（Jellyfin RunTimeTicks 换算）。 */
   private async doPlay(tracks: TrackInfo[], index: number, resumeFrom: number): Promise<void> {
-    // 起流前确保已绑定到最优网络（Wi-Fi 优先），避免恢复播放/冷启动路径从未绑网而走蓝牙代理
-    await NetBinder.bindBest();
+    const t0: TrackInfo = tracks[index];
+    // 起流前确保已绑定到最优网络（Wi-Fi 优先），避免恢复播放/冷启动路径从未绑网而走蓝牙代理；
+    // 传流地址用于判断服务器是否在内网——公网服务器会跳过"带感叹号"的不可用 Wi-Fi
+    await NetBinder.bindBest(t0.url);
     await this.releasePlayer();
     this.errorMsg = '';
     this.errored = false;

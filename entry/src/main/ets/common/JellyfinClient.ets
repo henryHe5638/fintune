@@ -98,7 +98,7 @@ export class JellyfinClient {
       return await this.doRequest(path, method, extraData);
     } catch (error) {
       hilog.warn(0x0001, TAG, 'request failed, rebind and retry once');
-      NetBinder.bindBest();
+      NetBinder.bindBest(this.serverUrl);
       await new Promise<void>((resolve: () => void): void => {
         const tt: number = setTimeout(() => {
           clearTimeout(tt);

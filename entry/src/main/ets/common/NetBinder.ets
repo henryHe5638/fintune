@@ -44,26 +44,44 @@ export class NetBinder {
     }
   }
 
-/** 核心绑定逻辑：遍历所有网络按 bearer 类型选网 —— Wi-Fi 优先 > 蜂窝兜底 > 蓝牙代理最次。
-   * 注意：绑定蜂窝时无法访问局域网 NAS（192.168.x.x），NAS 场景实际只在 Wi-Fi 下可用；
-   * 无任何匹配网络时回绑系统默认网络，避免残留失效绑定导致 DNS 解析失败（日志实测坑）。
-   * 每次绑定结果写日志（net bearers / bound to），便于真机排查 */
-  static async bindBest(): Promise<void> {
+/** 核心绑定逻辑：遍历所有网络按 bearer 类型 + 连通性验证选网。
+ * 除 bearer 外还检查 NET_CAPABILITY_VALIDATED：Wi-Fi 显示"已连接但带感叹号"（无出口）时
+ * bearer 仍是 Wi-Fi，但实际不通——公网服务器场景必须跳过它，改走已验证的蜂窝。
+ * 选网优先级（公网服务器）：已验证 Wi-Fi > 已验证蜂窝 > 未验证 Wi-Fi > 未验证蜂窝 > 蓝牙 > 默认网；
+ * 局域网服务器：任何 Wi-Fi > 蜂窝 > 蓝牙 > 默认网（蜂窝本来就到不了局域网，Wi-Fi 即使无出口也可能是内网）。
+ * serverUrl 传流地址或服务器地址均可，用于判断服务器是否在局域网。
+ * 每次绑定结果写日志（net bearers / bound to），便于真机排查 */
+  static async bindBest(serverUrl?: string): Promise<void> {
     try {
+      const needInternet: boolean = serverUrl === undefined ? true : !NetBinder.isLanHost(serverUrl);
       const nets: connection.NetHandle[] = await connection.getAllNets();
-      let wifi: connection.NetHandle | null = null;
-      let cellular: connection.NetHandle | null = null;
+      let wifiOk: connection.NetHandle | null = null;
+      let wifiBad: connection.NetHandle | null = null;
+      let cellOk: connection.NetHandle | null = null;
+      let cellBad: connection.NetHandle | null = null;
       let bluetooth: connection.NetHandle | null = null;
       for (const n of nets) {
         const caps: connection.NetCapabilities = await connection.getNetCapabilities(n);
-        let desc: string = '';
+        const validated: boolean = caps.networkCap !== undefined &&
+          caps.networkCap.indexOf(connection.NetCap.NET_CAPABILITY_VALIDATED) >= 0;
+        let desc: string = validated ? 'ok,' : 'no-internet,';
         for (const t of caps.bearerTypes) {
           desc = `${desc}${t},`;
-          if (t === connection.NetBearType.BEARER_WIFI && wifi === null) {
-            wifi = n;
+          if (t === connection.NetBearType.BEARER_WIFI) {
+            if (validated && wifiOk === null) {
+              wifiOk = n;
+            }
+            if (!validated && wifiBad === null) {
+              wifiBad = n;
+            }
           }
-          if (t === connection.NetBearType.BEARER_CELLULAR && cellular === null) {
-            cellular = n;
+          if (t === connection.NetBearType.BEARER_CELLULAR) {
+            if (validated && cellOk === null) {
+              cellOk = n;
+            }
+            if (!validated && cellBad === null) {
+              cellBad = n;
+            }
           }
           if (t === connection.NetBearType.BEARER_BLUETOOTH && bluetooth === null) {
             bluetooth = n;
@@ -71,8 +89,19 @@ export class NetBinder {
         }
         hilog.info(0x0001, TAG, 'net bearers: %{public}s', desc);
       }
-      const target: connection.NetHandle | null = wifi !== null ? wifi : (cellular !== null ? cellular : bluetooth);
-      NetBinder.lastCellular = cellular;
+      NetBinder.lastCellular = cellOk !== null ? cellOk : cellBad;
+      let target: connection.NetHandle | null = null;
+      let label: string = '';
+      if (needInternet) {
+        target = wifiOk !== null ? wifiOk : (cellOk !== null ? cellOk :
+          (wifiBad !== null ? wifiBad : (cellBad !== null ? cellBad : bluetooth)));
+        label = wifiOk !== null ? 'Wi-Fi' : (cellOk !== null ? '蜂窝' :
+          (wifiBad !== null ? 'Wi-Fi(未验证)' : (cellBad !== null ? '蜂窝(未验证)' : '蓝牙')));
+      } else {
+        target = wifiOk !== null ? wifiOk : (wifiBad !== null ? wifiBad :
+          (cellOk !== null ? cellOk : (cellBad !== null ? cellBad : bluetooth)));
+        label = (wifiOk !== null || wifiBad !== null) ? 'Wi-Fi' : (cellOk !== null ? '蜂窝' : '蓝牙');
+      }
       if (target === null) {
         try {
           const def: connection.NetHandle = await connection.getDefaultNet();
@@ -86,11 +115,47 @@ export class NetBinder {
         return;
       }
       await connection.setAppNet(target);
-      NetBinder.bound = wifi !== null ? 'Wi-Fi' : (cellular !== null ? '蜂窝' : '蓝牙');
+      NetBinder.bound = label;
       hilog.info(0x0001, TAG, 'bound to %{public}s', NetBinder.bound);
     } catch (error) {
       hilog.warn(0x0001, TAG, 'bindBest failed');
     }
+  }
+
+/** 判断服务器地址是否为局域网主机（内网 IPv4 / localhost / *.local / IPv6 回环）。域名一律视为公网 */
+  private static isLanHost(url: string): boolean {
+    const m: RegExpMatchArray | null = url.match(/^https?:\/\/\[?([^\]/:]+)\]?(?::\d+)?(?:\/|$)/i);
+    if (m === null) {
+      return false;
+    }
+    const host: string = m[1].toLowerCase();
+    if (host === 'localhost' || host === '::1' || host.endsWith('.local')) {
+      return true;
+    }
+    const parts: string[] = host.split('.');
+    if (parts.length !== 4) {
+      return false;
+    }
+    const seg: number[] = [0, 0, 0, 0];
+    for (let i: number = 0; i < 4; i++) {
+      if (!/^\d+$/.test(parts[i])) {
+        return false;
+      }
+      seg[i] = Number(parts[i]);
+    }
+    if (seg[0] === 10 || seg[0] === 127) {
+      return true;
+    }
+    if (seg[0] === 172 && seg[1] >= 16 && seg[1] <= 31) {
+      return true;
+    }
+    if (seg[0] === 192 && seg[1] === 168) {
+      return true;
+    }
+    if (seg[0] === 169 && seg[1] === 254) {
+      return true;
+    }
+    return false;
   }
 
   /** 播放重试的降网兜底：当前绑 Wi-Fi 则切蜂窝（公网服务器可达），否则回系统默认网络。

@@ -30,6 +30,7 @@ struct PlayerPage {
   private crownMaxVol: number = 15;
   private volHideTimer: number = -1;
   private lastTrackId: string = '';
+  private playlistScroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
     this.startUiTicker();
@@ -161,6 +162,17 @@ struct PlayerPage {
     }, 2000);
   }
 
+/** 打开播放列表并自动定位到正在播放的曲目（列表渲染后再滚动，避免首帧布局未完成定位失效） */
+  private openPlaylist(): void {
+    this.playlistOpen = true;
+    const t: number = setTimeout(() => {
+      clearTimeout(t);
+      if (playerModel.index >= 0) {
+        this.playlistScroller.scrollToIndex(playerModel.index, true);
+      }
+    }, 100);
+  }
+
   @Builder
   private playlistView() {
     Column({ space: 6 }) {
@@ -168,7 +180,7 @@ struct PlayerPage {
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
         .width('100%')
-      List() {
+      List({ scroller: this.playlistScroller }) {
         ForEach(this.player.queue, (t: TrackInfo, idx: number) => {
           ListItem() {
             Column({ space: 2 }) {
@@ -362,7 +374,7 @@ struct PlayerPage {
               .width(20)
               .height(20)
               .onClick(() => {
-                this.playlistOpen = true;
+                this.openPlaylist();
               })
           }
           .justifyContent(FlexAlign.Center)

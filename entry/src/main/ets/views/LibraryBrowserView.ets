@@ -243,7 +243,7 @@ export struct LibraryBrowserView {
   }
 
   private rebindNet(): void {
-    NetBinder.bindBest().then((): void => {
+    NetBinder.bindBest(this.serverUrl).then((): void => {
       this.netText = NetBinder.currentText();
     });
   }
