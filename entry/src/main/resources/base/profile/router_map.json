@@ -1,0 +1,19 @@
+{
+  "routerMap": [
+    {
+      "name": "browse",
+      "pageSourceFile": "src/main/ets/pages/BrowsePage.ets",
+      "buildFunction": "BrowsePageBuilder"
+    },
+    {
+      "name": "player",
+      "pageSourceFile": "src/main/ets/pages/PlayerPage.ets",
+      "buildFunction": "PlayerPageBuilder"
+    },
+    {
+      "name": "lyrics",
+      "pageSourceFile": "src/main/ets/pages/LyricsPage.ets",
+      "buildFunction": "LyricsPageBuilder"
+    }
+  ]
+}
