@@ -6,6 +6,14 @@
 
 华为手表应用市场没有任何 Plex / Jellyfin / SMB 客户端，而手表蓝牙连手机时 eSIM 会被智能关闭、流量走极慢的蓝牙代理，在线音乐体验极差。本项目让手表直接连家里的 Jellyfin，边下边播。
 
+## 关于 Jellyfin
+
+[Jellyfin](https://jellyfin.org) 是一个完全开源、免费的媒体服务器软件（GPL 协议），由社区驱动，可以把你的音乐、电影、剧集、照片集中在一处，并通过网页或各类客户端随时访问。它相当于免费版的 Plex / Emby：不收费、无会员、无追踪，服务端自行部署，数据完全掌握在自己手里。
+
+- 官网：https://jellyfin.org
+- 服务端支持 Windows / macOS / Linux / Docker / 群晖等 NAS，安装包见[官方下载页](https://jellyfin.org/downloads)
+- 本项目通过 Jellyfin 的 REST API 浏览曲库，并请求服务端转码流（MP3 128k）实现手表边下边播；服务器既可以是局域网 NAS，也可以是经公网代理（反代 / 内网穿透）暴露的服务器
+
 ## 功能
 
 - **Jellyfin 账密登录**：服务器地址 + 用户名/密码，token 自动获取与持久化，全程无需手动输入 API Key
@@ -32,6 +40,43 @@ ArkTS + ArkUI（声明式）· Stage 模型 · API 26
 | @ohos.net.connection (`setAppNet`) | 强制 Wi-Fi/蜂窝，绕过蓝牙代理 |
 | preferences | 配置与播放状态持久化 |
 | Navigation + 系统路由表 | 页面栈与系统返回手势 |
+
+## 开发设备与系统版本
+
+- **开发 / 验证真机**：HUAWEI WATCH 6（圆表，466×466）
+- **系统**：HarmonyOS 6（API 26），`targetSdkVersion` 26
+- **DevEco Studio**：26+
+- 其他运行 HarmonyOS 6（API 26）的华为手表理论可用，未逐一验证；更低 API 版本需自行验证 AVSession、长时任务等能力差异
+
+## 界面截图
+
+手表应用列表中的 FinTune 鳍韵：
+
+![应用列表](image/WatchApScreenshot_20261011_211734286.png)
+
+连接 Jellyfin 服务器（支持局域网地址或公网代理域名）：
+
+![连接服务器](image/WatchApScreenshot_20261011_211547798.png)
+
+Jellyfin 账密登录（token 自动获取与持久化）：
+
+![登录](image/WatchApScreenshot_20261011_211749880.png)
+
+曲库浏览与底部播放条：
+
+![曲库](image/WatchApScreenshot_20261011_211501827.png)
+
+菜单（排序切换、实时网络绑定状态查看、退出登录、更换服务器）：
+
+![菜单](image/WatchApScreenshot_20261011_211542267.png)
+
+播放详情页（专辑封面 + 播放进度环、切歌、音量、播放列表）：
+
+![播放详情页](image/WatchApScreenshot_20261011_212941503.png)
+
+歌词页（当前行高亮居中，支持双击行跳转）：
+
+![歌词页](image/WatchApScreenshot_20261011_212943317.png)
 
 ## 构建
 

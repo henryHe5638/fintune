@@ -13,6 +13,7 @@ const TAG: string = 'FinTune';
 export class NetBinder {
   private static bound: string = '未绑定';
   private static watching: boolean = false;
+  private static lastCellular: connection.NetHandle | null = null;
   static onLost: () => void = () => {
   };
   static onAvailable: () => void = () => {
@@ -71,6 +72,7 @@ export class NetBinder {
         hilog.info(0x0001, TAG, 'net bearers: %{public}s', desc);
       }
       const target: connection.NetHandle | null = wifi !== null ? wifi : (cellular !== null ? cellular : bluetooth);
+      NetBinder.lastCellular = cellular;
       if (target === null) {
         try {
           const def: connection.NetHandle = await connection.getDefaultNet();
@@ -88,6 +90,27 @@ export class NetBinder {
       hilog.info(0x0001, TAG, 'bound to %{public}s', NetBinder.bound);
     } catch (error) {
       hilog.warn(0x0001, TAG, 'bindBest failed');
+    }
+  }
+
+  /** 播放重试的降网兜底：当前绑 Wi-Fi 则切蜂窝（公网服务器可达），否则回系统默认网络。
+   * 解决"手表连着无出口的 Wi-Fi（bearer 是 Wi-Fi 但实际不通）导致播放一直失败"的问题。 */
+  static async bindFallback(): Promise<void> {
+    try {
+      if (NetBinder.bound === 'Wi-Fi' && NetBinder.lastCellular !== null) {
+        await connection.setAppNet(NetBinder.lastCellular);
+        NetBinder.bound = '蜂窝';
+        hilog.info(0x0001, TAG, 'fallback bound to cellular');
+        return;
+      }
+      const def: connection.NetHandle = await connection.getDefaultNet();
+      if (def !== undefined) {
+        await connection.setAppNet(def);
+        NetBinder.bound = '默认';
+        hilog.info(0x0001, TAG, 'fallback bound to default');
+      }
+    } catch (error) {
+      hilog.warn(0x0001, TAG, 'bindFallback failed');
     }
   }
 }

@@ -2,6 +2,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { CtxHolder } from '../common/CtxHolder';
+import { NetBinder } from '../common/NetBinder';
 
 const DOMAIN = 0x0000;
 
@@ -10,6 +11,7 @@ export default class EntryAbility extends UIAbility {
     CtxHolder.ctx = this.context;
     this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+    NetBinder.bindBest();
   }
 
   onDestroy(): void {
@@ -35,8 +37,9 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
-    // Ability has brought to foreground
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
+    // 回前台时重新选网：后台期间 Wi-Fi/蓝牙连接状态可能已变化，避免继续走蓝牙代理
+    NetBinder.bindBest();
+    hilog.info(DOMAIN, 'testTag', '%{public}s', 'onForeground');
   }
 
   onBackground(): void {

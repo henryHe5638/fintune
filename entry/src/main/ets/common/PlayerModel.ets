@@ -7,6 +7,7 @@
 
 import { media } from '@kit.MediaKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { CtxHolder } from './CtxHolder';
 import { SessionService } from './SessionService';
 import { NetBinder } from './NetBinder';
@@ -41,6 +42,7 @@ export class PlayerModel {
   private chain: Promise<void> = Promise.resolve();
   private retryCount: number = 0;
   private netLostFlag: boolean = false;
+  private errored: boolean = false;
   private lastPos: number = -1;
   private stallCount: number = 0;
   private lastGoodPos: number = 0;
@@ -64,15 +66,19 @@ export class PlayerModel {
    * 时长兜底：AVPlayer 对 Jellyfin 转码流返回的 duration 不可靠（实测出现过 134217400 的垃圾值），
    * 不合理时改用曲目自带的 durationMs（Jellyfin RunTimeTicks 换算）。 */
   private async doPlay(tracks: TrackInfo[], index: number, resumeFrom: number): Promise<void> {
+    // 起流前确保已绑定到最优网络（Wi-Fi 优先），避免恢复播放/冷启动路径从未绑网而走蓝牙代理
+    await NetBinder.bindBest();
     await this.releasePlayer();
     this.errorMsg = '';
+    this.errored = false;
     const t: TrackInfo = tracks[index];
     const p: media.AVPlayer = await media.createAVPlayer();
     this.avPlayer = p;
 /** 播放错误处理：断网引起的错误提示等待恢复；偶发网络错误自动重试最多 2 次（间隔 1.5s）；重试耗尽才报最终错误 */
-    p.on('error', (): void => {
-      hilog.error(0x0001, TAG, 'AVPlayer error');
+    p.on('error', (error: BusinessError): void => {
+      hilog.error(0x0001, TAG, 'AVPlayer error code=%{public}d msg=%{public}s', error.code, error.message);
       this.isPlaying = false;
+      this.errored = true;
       SessionService.updateState(false);
       if (this.netLostFlag) {
         this.errorMsg = '网络断开，恢复后自动继续';
@@ -86,7 +92,14 @@ export class PlayerModel {
           (this.lastGoodPos > 0 ? this.lastGoodPos : -1);
         const t: number = setTimeout(() => {
           clearTimeout(t);
-          this.requestPlay(this.queue, this.index, resumePos);
+          if (this.retryCount >= 2) {
+            // 最后一次重试前先降网兜底（Wi-Fi 不通时切蜂窝/默认网），避免死绑在不可用的 Wi-Fi 上
+            NetBinder.bindFallback().then((): void => {
+              this.requestPlay(this.queue, this.index, resumePos);
+            });
+          } else {
+            this.requestPlay(this.queue, this.index, resumePos);
+          }
         }, 1500);
       } else {
         this.errorMsg = '播放出错，请重试';
@@ -97,6 +110,7 @@ export class PlayerModel {
         p.prepare();
       } else if (state === 'prepared') {
         this.retryCount = 0;
+        this.errored = false;
         this.errorMsg = '';
         this.stallCount = 0;
         this.lastPos = -1;
@@ -313,9 +327,13 @@ export class PlayerModel {
 /** 继续播放：播放器实例不在（被杀或冷启动恢复态）时，用已持久化的队列重新起播 */
   resume(): void {
     const p: media.AVPlayer | null = this.avPlayer;
-    if (p === null) {
+    if (p === null || this.errored) {
+      // 实例不存在或已处于 error 态（error 态的 AVPlayer 不能复用），重新起流
       if (this.queue.length > 0 && this.index >= 0) {
-        this.requestPlay(this.queue, this.index);
+        this.retryCount = 0;
+        this.errored = false;
+        const resumePos: number = this.lastGoodPos > 0 ? this.lastGoodPos : -1;
+        this.requestPlay(this.queue, this.index, resumePos);
       }
       return;
     }
