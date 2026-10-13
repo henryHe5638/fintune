@@ -79,10 +79,15 @@ export class PlayerModel {
     await this.releasePlayer();
     this.errorMsg = '';
     this.errored = false;
-    // 队列 URL 是点歌时按当时码率烘焙的；起流时按当前设置重写码率参数，
-    // 菜单里切了码率无需重新点歌，下一首/自动重连即生效
+    // 队列 URL 是点歌时按当时码率/token 烘焙的；起流时按当前设置重写，
+    // 菜单切码率或重新登录换 token 后无需重新点歌，下一首/自动重连即生效
     const bm: number = AppStorage.get<number>('maxBitrate') ?? 128000;
-    const streamUrl: string = t0.url.replace(/maxStreamingBitrate=\d+/, `maxStreamingBitrate=${bm}`);
+    const token: string = AppStorage.get<string>('accessToken') ?? '';
+    let streamUrl: string = t0.url.replace(/maxStreamingBitrate=\d+/, `maxStreamingBitrate=${bm}`);
+    if (token.length > 0) {
+      // 重新登录会产生新 token，旧队列 URL 里的 api_key 会 401（服务端日志 "Invalid token"）
+      streamUrl = streamUrl.replace(/api_key=[^&]+/, `api_key=${token}`);
+    }
     const t: TrackInfo = tracks[index];
     const p: media.AVPlayer = await media.createAVPlayer();
     this.avPlayer = p;
@@ -197,7 +202,8 @@ export class PlayerModel {
       if (this.isPlaying && this.trackName.length > 0 && this.positionMs >= 0) {
         if (this.positionMs === this.lastPos) {
           this.stallCount += 1;
-          if (this.stallCount >= 2 && this.retryCount < 2 &&
+          // 阈值 3（约 6 秒）：先给播放器缓冲自愈的机会，轻微卡顿不触发重连
+          if (this.stallCount >= 3 && this.retryCount < 2 &&
             this.queue.length > 0 && this.index >= 0 && this.lastGoodPos > 0) {
             this.retryCount += 1;
             this.stallCount = 0;
