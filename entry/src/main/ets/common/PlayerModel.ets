@@ -97,6 +97,14 @@ export class PlayerModel {
       this.isPlaying = false;
       this.errored = true;
       SessionService.updateState(false);
+      // token 失效（服务端 401）：重试无意义，提示重新登录并通知首页跳登录页
+      if (error.message.indexOf('401') >= 0) {
+        this.retryCount = 0;
+        this.errorMsg = '登录已失效，请重新登录';
+        const n: number = AppStorage.get<number>('authExpired') ?? 0;
+        AppStorage.setOrCreate('authExpired', n + 1);
+        return;
+      }
       if (this.netLostFlag) {
         this.errorMsg = '网络断开，恢复后自动继续';
         return;

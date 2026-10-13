@@ -16,6 +16,7 @@ struct Index {
   @State pageStack: NavPathStack = new NavPathStack();
   @StorageProp('logoutRequest') @Watch('onLogoutReq') logoutReq: number = 0;
   @StorageProp('changeServerRequest') @Watch('onChangeServerReq') changeServerReq: number = 0;
+  @StorageProp('authExpired') @Watch('onAuthExpired') authExpired: number = 0;
   @State serverUrl: string = '';
   @State accessToken: string = '';
   @State userId: string = '';
@@ -108,6 +109,18 @@ struct Index {
   private onChangeServerReq(): void {
     if (this.changeServerReq > 0) {
       this.onChangeServer();
+    }
+  }
+
+/** token 失效（播放侧 401）：停播清队列、清空路由栈、回登录阶段（保留服务器配置） */
+  private onAuthExpired(): void {
+    if (this.authExpired > 0 && this.stage !== 'login') {
+      playerModel.stop();
+      this.accessToken = '';
+      this.userId = '';
+      this.userName = '';
+      this.pageStack.clear();
+      this.stage = 'login';
     }
   }
 
