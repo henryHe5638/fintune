@@ -43,6 +43,7 @@ export struct LibraryBrowserView {
   @State sortExpanded: boolean = false;
   @State netText: string = '未绑定';
   @State centerIndex: number = 0;
+  @StorageProp('maxBitrate') maxBitrate: number = 128000;
   @StorageProp('overlayOpen') @Watch('onOverlayFlag') overlayFlag: boolean = false;
   private mainListScroller: Scroller = new Scroller();
   private savedPath: string[] = [];
@@ -130,7 +131,7 @@ export struct LibraryBrowserView {
     // token 只能走 api_key query（AVPlayer 播放网络 URL 无法带自定义请求头）。
     const container: string = encodeURIComponent('mp3,aac|mp3,aac');
     return `${this.serverUrl}/Audio/${id}/universal?userId=${this.userId}&api_key=${this.accessToken}` +
-      `&container=${container}&audioCodec=mp3&maxStreamingBitrate=128000`;
+      `&container=${container}&audioCodec=mp3&maxStreamingBitrate=${this.maxBitrate}`;
   }
 
 /** 首页条目点击：歌曲=构建队列播放；文件夹=push browse 路由页（进入子文件夹） */

@@ -211,26 +211,10 @@ struct LyricsPage {
           .padding({ top: 24, bottom: 30 })
           .id('lyricsRoot')
           .focusable(true)
+          .defaultFocus(true)
           .onAppear(() => {
             this.reqFocus('lyricsRoot');
             this.enterLyrics();
-          })
-/** 表冠滚动歌词：累计 20° 滚动 26px（手动 scrollBy 方案）。
-   * 注：本 ROM 上 requestFocus 对 ArcList/部分容器恒返回 false，原生表冠滚动不可用，
-   * 故改为普通 List + 手动滚动；若你的设备原生可用，可简化此逻辑 */
-          .onDigitalCrown((event: CrownEvent): void => {
-            if (event.action !== CrownAction.UPDATE) {
-              return;
-            }
-            this.crownAccum += event.degree;
-            while (this.crownAccum >= 20) {
-              this.crownAccum -= 20;
-              this.listScroller.scrollBy(0, 26);
-            }
-            while (this.crownAccum <= -20) {
-              this.crownAccum += 20;
-              this.listScroller.scrollBy(0, -26);
-            }
           })
         }
       }
@@ -239,6 +223,24 @@ struct LyricsPage {
       .backgroundColor('#E6000000')
     }
     .hideTitleBar(true)
+/** 表冠滚动歌词：累计 20° 滚动 26px（手动 scrollBy 方案）。
+ * 绑定在 NavDestination 上：表冠事件由系统派发给获焦节点（实测焦点常落在 NavDestination 自身），
+ * 沿祖先链冒泡；NavDestination 在冒泡链上必能收到，其子孙节点反而收不到（真机/模拟器日志实测）。 */
+    .onDigitalCrown((event: CrownEvent): void => {
+      hilog.info(0x0001, 'FinTune', 'crown action=%{public}d degree=%{public}d', event.action, event.degree);
+      if (event.action !== CrownAction.UPDATE) {
+        return;
+      }
+      this.crownAccum += event.degree;
+      while (this.crownAccum >= 20) {
+        this.crownAccum -= 20;
+        this.listScroller.scrollBy(0, 26);
+      }
+      while (this.crownAccum <= -20) {
+        this.crownAccum += 20;
+        this.listScroller.scrollBy(0, -26);
+      }
+    })
     .onReady((ctx: NavDestinationContext) => {
       this.navStack = ctx.pathStack;
     })

@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { CtxHolder } from '../common/CtxHolder';
 import { NetBinder } from '../common/NetBinder';
+import { AppConfig } from '../common/AppConfig';
 
 const DOMAIN = 0x0000;
 
@@ -12,6 +13,9 @@ export default class EntryAbility extends UIAbility {
     this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
     NetBinder.bindBest();
+    AppConfig.loadBitrate(this.context).then((n: number): void => {
+      AppStorage.setOrCreate('maxBitrate', n);
+    });
   }
 
   onDestroy(): void {

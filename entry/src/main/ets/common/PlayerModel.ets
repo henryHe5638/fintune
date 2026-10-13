@@ -11,8 +11,13 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { CtxHolder } from './CtxHolder';
 import { SessionService } from './SessionService';
 import { NetBinder } from './NetBinder';
+import { AppConfig } from './AppConfig';
 
 const TAG: string = 'FinTune';
+
+interface RawPlayPath {
+  path?: string[];
+}
 
 export interface TrackInfo {
   id: string;
@@ -46,6 +51,7 @@ export class PlayerModel {
   private lastPos: number = -1;
   private stallCount: number = 0;
   private lastGoodPos: number = 0;
+  private playAfterSeekDone: boolean = false;
 
 /** 播放入口：把切歌请求串进 Promise 链，保证快速连点时旧播放器一定先释放，不会多首同时播 */
   /**
@@ -73,6 +79,10 @@ export class PlayerModel {
     await this.releasePlayer();
     this.errorMsg = '';
     this.errored = false;
+    // 队列 URL 是点歌时按当时码率烘焙的；起流时按当前设置重写码率参数，
+    // 菜单里切了码率无需重新点歌，下一首/自动重连即生效
+    const bm: number = AppStorage.get<number>('maxBitrate') ?? 128000;
+    const streamUrl: string = t0.url.replace(/maxStreamingBitrate=\d+/, `maxStreamingBitrate=${bm}`);
     const t: TrackInfo = tracks[index];
     const p: media.AVPlayer = await media.createAVPlayer();
     this.avPlayer = p;
@@ -123,27 +133,49 @@ export class PlayerModel {
         }
         this.durationMs = d;
         SessionService.updateMetadata(this.currentId, this.trackName, this.artistName, this.durationMs);
-        // 断点续播：弱网重试/恢复时先 seek 回上次位置再播放，进度与歌词时间轴保持连续
+        // 断点续播：弱网重试/恢复时先 seek 回上次位置，等 seekDone 再 play——
+        // play 抢在 seek 生效前会导致网络流从头播放（实测"卡回开头"的根因）
         if (resumeFrom > 0) {
           let target: number = resumeFrom;
           if (d > 3000 && target > d - 3000) {
             target = Math.max(0, d - 3000);
           }
+          this.playAfterSeekDone = true;
           p.seek(target);
           this.positionMs = target;
+          // 兜底：部分网络流不回调 seekDone，1s 后仍未播则直接播，避免卡死在 prepared
+          const st: number = setTimeout(() => {
+            clearTimeout(st);
+            if (this.playAfterSeekDone) {
+              this.playAfterSeekDone = false;
+              p.play();
+            }
+          }, 1000);
+        } else {
+          p.play();
         }
-        p.play();
       } else if (state === 'completed') {
         this.isPlaying = false;
         this.advance(true);
       }
     });
-/** 系统每约 100ms 上报一次播放进度（比轮询 currentTime 更及时） */
+/** seek 完成回调：断点续播等 seek 落位后再开始播放 */
+    p.on('seekDone', (): void => {
+      if (this.playAfterSeekDone) {
+        this.playAfterSeekDone = false;
+        p.play();
+      }
+    });
+/** 系统每约 100ms 上报一次播放进度；按 500ms 阈值节流后再写入 @Observed 字段，
+     * 避免 10Hz 的状态通知触发全 UI 重渲染（手表功耗敏感） */
     p.on('timeUpdate', (t: number): void => {
-      this.positionMs = t;
+      if (Math.abs(t - this.positionMs) >= 500) {
+        this.positionMs = t;
+      }
     });
     this.queue = tracks;
     this.index = index;
+    this.persistNow();
     this.trackName = t.name;
     this.artistName = t.artist;
     this.currentId = t.id;
@@ -179,7 +211,7 @@ export class PlayerModel {
         this.lastPos = this.positionMs;
       }
     }, 2000);
-    p.url = t.url;
+    p.url = streamUrl;
 /** 挂接网络断开/恢复回调：断网暂停并提示，恢复后自动续播当前曲目 */
     NetBinder.onLost = (): void => {
       this.netLostFlag = true;
@@ -213,6 +245,28 @@ export class PlayerModel {
         SessionService.updateState(true);
       });
     }
+  }
+
+/** 立即持久化当前队列与下标：切歌/自动连播/弱网重连时都会走到，保证播放中退出应用也不丢状态。
+   * path（浏览路径）保留已持久化的值，由浏览页负责维护。 */
+  private persistNow(): void {
+    const ctx = CtxHolder.ctx;
+    if (ctx === null || this.queue.length === 0 || this.index < 0) {
+      return;
+    }
+    AppConfig.loadPlayState(ctx).then((raw: string): void => {
+      let path: string[] = [];
+      if (raw.length > 0) {
+        try {
+          const st = JSON.parse(raw) as RawPlayPath;
+          path = st.path ?? [];
+        } catch (error) {
+          path = [];
+        }
+      }
+      const st: string = JSON.stringify({ path: path, queue: this.queue, index: this.index });
+      AppConfig.savePlayState(ctx, st);
+    });
   }
 
 /** 一曲播完自动推进：单曲循环=重播；随机=换随机下标；顺序=到队尾则停（手动切歌允许回卷到头） */
@@ -380,6 +434,10 @@ export class PlayerModel {
     this.durationMs = 0;
     this.queue = [];
     this.index = -1;
+    const ctx = CtxHolder.ctx;
+    if (ctx !== null) {
+      AppConfig.savePlayState(ctx, JSON.stringify({ path: [], queue: [], index: -1 }));
+    }
     SessionService.updateState(false);
   }
 

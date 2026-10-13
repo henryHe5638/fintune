@@ -46,6 +46,7 @@ export struct BrowsePage {
   @State loading: boolean = false;
   @State errorMsg: string = '';
   @State player: PlayerModel = playerModel;
+  @StorageProp('maxBitrate') maxBitrate: number = 128000;
   @State centerIndex: number = 0;
   @State menuOpen: boolean = false;
   @State sortExpanded: boolean = false;
@@ -139,7 +140,7 @@ export struct BrowsePage {
   private buildTrackUrl(id: string): string {
     const container: string = encodeURIComponent('mp3,aac|mp3,aac');
     return `${this.serverUrl}/Audio/${id}/universal?userId=${this.userId}&api_key=${this.accessToken}` +
-      `&container=${container}&audioCodec=mp3&maxStreamingBitrate=128000`;
+      `&container=${container}&audioCodec=mp3&maxStreamingBitrate=${this.maxBitrate}`;
   }
 
   private savePlayState(tracks: TrackInfo[], index: number): void {
