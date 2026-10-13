@@ -7,6 +7,7 @@ import { AuthResult } from '../common/JellyfinClient';
 import { ServerConfigView } from '../views/ServerConfigView';
 import { LoginView } from '../views/LoginView';
 import { LibraryBrowserView } from '../views/LibraryBrowserView';
+import { playerModel } from '../common/PlayerModel';
 
 @Entry
 @Component
@@ -70,8 +71,9 @@ struct Index {
     this.stage = 'library';
   }
 
-/** 退出登录：清凭证、清空路由栈（防止浏览页残留在栈上）、回登录阶段 */
+/** 退出登录：停播并清空队列（token 即将失效，残留队列只会 401）、清凭证、清空路由栈、回登录阶段 */
   private onLogout(): void {
+    playerModel.stop();
     AppConfig.clearAuth(getContext(this));
     this.accessToken = '';
     this.userId = '';
@@ -80,8 +82,9 @@ struct Index {
     this.stage = 'login';
   }
 
-/** 更换服务器：全量清空（含播放状态）、清 AppStorage 凭据、清空路由栈、回配置阶段 */
+/** 更换服务器：先停播清队列，再全量清空（含播放状态）、清 AppStorage 凭据、清空路由栈、回配置阶段 */
   private onChangeServer(): void {
+    playerModel.stop();
     AppConfig.clearAll(getContext(this));
     this.serverUrl = '';
     this.accessToken = '';
