@@ -5,6 +5,7 @@
 
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import { deviceInfo } from '@kit.BasicServicesKit';
 
 const STORE_NAME: string = 'wrist_music_config';
 const KEY_SERVER_URL: string = 'server_url';
@@ -92,10 +93,18 @@ export class AppConfig {
     return 'mp3';
   }
 
-  /** 读取或生成本机 DeviceId：Jellyfin 对新登录会吊销同 DeviceId 旧会话的 token，
-   * 写死会导致一台设备登录把另一台踢下线，必须每台设备唯一并持久化 */
+  /** 读取或生成本机 DeviceId：Jellyfin 对新登录会吊销同 DeviceId 旧会话的 token，必须每台设备唯一。
+   * 优先使用系统 ODID（开放设备标识符）：同一应用在同一设备上卸载重装保持不变，
+   * 避免重装后在 Jellyfin 里变成新设备；取不到时退化为随机持久化 */
   static async loadDeviceId(ctx: common.Context): Promise<string> {
     const prefs = await preferences.getPreferences(ctx, STORE_NAME);
+    const odid: string = deviceInfo.ODID;
+    if (odid.length > 0) {
+      const id: string = `wrist-${odid}`;
+      await prefs.put(KEY_DEVICE_ID, id);
+      await prefs.flush();
+      return id;
+    }
     const raw: string = await prefs.get(KEY_DEVICE_ID, '') as string;
     if (raw.length > 0) {
       return raw;
