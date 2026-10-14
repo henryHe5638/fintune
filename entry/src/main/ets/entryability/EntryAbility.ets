@@ -16,6 +16,12 @@ export default class EntryAbility extends UIAbility {
     AppConfig.loadBitrate(this.context).then((n: number): void => {
       AppStorage.setOrCreate('maxBitrate', n);
     });
+    AppConfig.loadCodec(this.context).then((c: string): void => {
+      AppStorage.setOrCreate('audioCodec', c);
+    });
+    AppConfig.loadDeviceId(this.context).then((id: string): void => {
+      AppStorage.setOrCreate('deviceId', id);
+    });
   }
 
   onDestroy(): void {

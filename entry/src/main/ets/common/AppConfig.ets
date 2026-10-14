@@ -14,6 +14,8 @@ const KEY_USER_NAME: string = 'user_name';
 const KEY_SORT_KEY: string = 'sort_key';
 const KEY_SORT_ASC: string = 'sort_asc';
 const KEY_BITRATE: string = 'max_bitrate';
+const KEY_CODEC: string = 'audio_codec';
+const KEY_DEVICE_ID: string = 'device_id';
 const KEY_PLAY_STATE: string = 'play_state';
 
 export class AppConfig {
@@ -72,6 +74,37 @@ export class AppConfig {
     const raw: string = await prefs.get(KEY_BITRATE, '128000') as string;
     const n: number = Number(raw);
     return n > 0 ? n : 128000;
+  }
+
+  /** 持久化转码格式（mp3 / aac） */
+  static async saveCodec(ctx: common.Context, codec: string): Promise<void> {
+    const prefs = await preferences.getPreferences(ctx, STORE_NAME);
+    await prefs.put(KEY_CODEC, codec);
+    await prefs.flush();
+  }
+
+  static async loadCodec(ctx: common.Context): Promise<string> {
+    const prefs = await preferences.getPreferences(ctx, STORE_NAME);
+    const raw: string = await prefs.get(KEY_CODEC, 'mp3') as string;
+    if (raw === 'aac' || raw === 'raw') {
+      return raw;
+    }
+    return 'mp3';
+  }
+
+  /** 读取或生成本机 DeviceId：Jellyfin 对新登录会吊销同 DeviceId 旧会话的 token，
+   * 写死会导致一台设备登录把另一台踢下线，必须每台设备唯一并持久化 */
+  static async loadDeviceId(ctx: common.Context): Promise<string> {
+    const prefs = await preferences.getPreferences(ctx, STORE_NAME);
+    const raw: string = await prefs.get(KEY_DEVICE_ID, '') as string;
+    if (raw.length > 0) {
+      return raw;
+    }
+    const rand: number = Math.floor(Math.random() * 0xFFFFFFFF);
+    const id: string = `wrist-${Date.now().toString(16)}-${rand.toString(16)}`;
+    await prefs.put(KEY_DEVICE_ID, id);
+    await prefs.flush();
+    return id;
   }
 
 /** 持久化播放状态：JSON 字符串含 浏览路径 path / 播放队列 queue / 下标 index，用于重启恢复续播与层级定位 */

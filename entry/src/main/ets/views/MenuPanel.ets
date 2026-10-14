@@ -17,8 +17,11 @@ export struct MenuPanel {
   @Prop sortAsc: boolean;
   @Prop netText: string;
   @StorageProp('maxBitrate') maxBitrate: number = 128000;
+  @StorageProp('audioCodec') audioCodec: string = 'mp3';
   @State sortExpanded: boolean = false;
-  @State bitrateExpanded: boolean = false;
+  @State settingsExpanded: boolean = false;
+  @State codecPick: boolean = false;
+  @State bitratePick: boolean = false;
   onSort: (key: string) => void = () => {
   };
   onNet: () => void = () => {
@@ -33,12 +36,6 @@ export struct MenuPanel {
     return `排序：${label}`;
   }
 
-/** 码率主行文案 */
-  private bitrateText(): string {
-    const kbps: number = Math.round(this.maxBitrate / 1000);
-    return `码率：${kbps}k`;
-  }
-
 /** 选择码率：写入 AppStorage 即时生效（作用于下一首起流），并持久化 */
   private selectBitrate(v: number): void {
     AppStorage.setOrCreate('maxBitrate', v);
@@ -48,34 +45,128 @@ export struct MenuPanel {
     }
   }
 
-/** 码率选项行 */
+/** 码率选项行；选"原始（不转码）"时灰掉——不转码没有码率概念 */
   @Builder
   private bitrateRow(kbps: number) {
     Row() {
       Text(`${kbps}k`)
         .fontSize(12)
-        .fontColor(this.maxBitrate === kbps * 1000 ? '#FF3EB575' : '#FFFFFFFF')
+        .fontColor(this.audioCodec === 'raw' ? '#66FFFFFF' :
+          (this.maxBitrate === kbps * 1000 ? '#FF3EB575' : '#FFFFFFFF'))
         .layoutWeight(1)
     }
     .width('100%')
     .height(34)
     .padding({ left: 12, right: 12 })
-    .backgroundColor(this.maxBitrate === kbps * 1000 ? '#33FFFFFF' : '#26FFFFFF')
+    .backgroundColor(this.audioCodec === 'raw' ? '#14FFFFFF' :
+      (this.maxBitrate === kbps * 1000 ? '#33FFFFFF' : '#26FFFFFF'))
     .borderRadius(10)
     .onClick(() => {
-      this.selectBitrate(kbps * 1000);
+      if (this.audioCodec !== 'raw') {
+        this.selectBitrate(kbps * 1000);
+      }
     })
   }
 
-/** 退出登录：路由页无法直接回调首页，用 AppStorage 计数器通知 Index 执行（观察者模式） */
+/** 选择转码格式：写入 AppStorage 即时生效（作用于下一首起流），并持久化 */
+  private selectCodec(c: string): void {
+    AppStorage.setOrCreate('audioCodec', c);
+    const ctx = CtxHolder.ctx;
+    if (ctx !== null) {
+      AppConfig.saveCodec(ctx, c);
+    }
+  }
+
+/** 格式摘要文案 */
+  private codecLabel(): string {
+    if (this.audioCodec === 'aac') {
+      return 'AAC';
+    }
+    if (this.audioCodec === 'raw') {
+      return '原始（不转码）';
+    }
+    return 'MP3';
+  }
+
+/** 码率摘要文案 */
+  private bitrateLabel(): string {
+    return `${Math.round(this.maxBitrate / 1000)}k`;
+  }
+
+/** 设置项摘要行：左侧名称，右侧当前值（选中色），点击进选择页 */
+  @Builder
+  private valueRow(label: string, value: string, enabled: boolean, action: () => void) {
+    Row() {
+      Text(label)
+        .fontSize(12)
+        .fontColor(enabled ? '#FFFFFFFF' : '#66FFFFFF')
+        .layoutWeight(1)
+      Text(value)
+        .fontSize(12)
+        .fontColor(enabled ? '#FF3EB575' : '#66FFFFFF')
+    }
+    .width('100%')
+    .height(34)
+    .padding({ left: 12, right: 12 })
+    .backgroundColor('#26FFFFFF')
+    .borderRadius(10)
+    .onClick(() => {
+      if (enabled) {
+        action();
+      }
+    })
+  }
+
+/** 格式选项行 */
+  @Builder
+  private codecRow(label: string, value: string) {
+    Row() {
+      Text(label)
+        .fontSize(12)
+        .fontColor(this.audioCodec === value ? '#FF3EB575' : '#FFFFFFFF')
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .height(34)
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(this.audioCodec === value ? '#33FFFFFF' : '#26FFFFFF')
+    .borderRadius(10)
+    .onClick(() => {
+      this.selectCodec(value);
+    })
+  }
+
+/** 退出登录：先弹确认，防误触清凭证（手表屏幕小、菜单项密集） */
   private requestLogout(): void {
-    const n = AppStorage.get<number>('logoutRequest') ?? 0;
-    AppStorage.setOrCreate('logoutRequest', n + 1);
+    AlertDialog.show({
+      title: '退出登录',
+      message: '将停止播放并清除登录状态，确定吗？',
+      primaryButton: {
+        value: '退出',
+        action: (): void => {
+          const n = AppStorage.get<number>('logoutRequest') ?? 0;
+          AppStorage.setOrCreate('logoutRequest', n + 1);
+        }
+      },
+      secondaryButton: { value: '取消', action: (): void => {
+      } }
+    });
   }
 
   private requestChangeServer(): void {
-    const n = AppStorage.get<number>('changeServerRequest') ?? 0;
-    AppStorage.setOrCreate('changeServerRequest', n + 1);
+    AlertDialog.show({
+      title: '更换服务器',
+      message: '将停止播放并清除当前服务器的登录与播放状态，确定吗？',
+      primaryButton: {
+        value: '更换',
+        action: (): void => {
+          const n = AppStorage.get<number>('changeServerRequest') ?? 0;
+          AppStorage.setOrCreate('changeServerRequest', n + 1);
+        }
+      },
+      secondaryButton: { value: '取消', action: (): void => {
+      } }
+    });
   }
 
   private exitApp(): void {
@@ -134,7 +225,7 @@ export struct MenuPanel {
   build() {
     Scroll() {
       Column({ space: 8 }) {
-        if (!this.sortExpanded && !this.bitrateExpanded) {
+        if (!this.sortExpanded && !this.settingsExpanded && !this.codecPick && !this.bitratePick) {
           Text('菜单')
             .fontSize(13)
             .fontWeight(FontWeight.Bold)
@@ -145,8 +236,8 @@ export struct MenuPanel {
           this.menuRow(`网络：${this.netText}`, $r('app.media.wifi_icon'), (): void => {
             this.onNet();
           })
-          this.menuRow(this.bitrateText(), $r('app.media.speaker_icon'), (): void => {
-            this.bitrateExpanded = true;
+          this.menuRow('播放设置', $r('app.media.speaker_icon'), (): void => {
+            this.settingsExpanded = true;
           })
           this.menuRow('退出登录', $r('app.media.logout_icon'), (): void => {
             this.requestLogout();
@@ -157,15 +248,39 @@ export struct MenuPanel {
           this.menuRow('关闭应用', $r('app.media.logout_icon'), (): void => {
             this.exitApp();
           })
-        } else if (this.bitrateExpanded) {
-          Text('播放码率')
+        } else if (this.codecPick) {
+          Text('转码格式')
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+          this.codecRow('MP3（兼容最好）', 'mp3')
+          this.codecRow('AAC（同音质更小）', 'aac')
+          this.codecRow('原始（不转码）', 'raw')
+          this.menuRow('返回', $r('app.media.prev_icon'), (): void => {
+            this.codecPick = false;
+          })
+        } else if (this.bitratePick) {
+          Text('转码码率')
             .fontSize(13)
             .fontWeight(FontWeight.Bold)
           ForEach(BITRATE_KBPS, (kbps: number) => {
             this.bitrateRow(kbps);
           }, (kbps: number) => `${kbps}`)
           this.menuRow('返回', $r('app.media.prev_icon'), (): void => {
-            this.bitrateExpanded = false;
+            this.bitratePick = false;
+          })
+        } else if (this.settingsExpanded) {
+          Text('播放设置')
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+          this.valueRow('转码格式', this.codecLabel(), true, (): void => {
+            this.codecPick = true;
+          })
+          this.valueRow('转码码率', this.audioCodec === 'raw' ? '不可用' : this.bitrateLabel(),
+            this.audioCodec !== 'raw', (): void => {
+              this.bitratePick = true;
+            })
+          this.menuRow('返回', $r('app.media.prev_icon'), (): void => {
+            this.settingsExpanded = false;
           })
         } else {
           Text('排序方式')

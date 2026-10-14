@@ -48,6 +48,7 @@ export class PlayerModel {
   private retryCount: number = 0;
   private netLostFlag: boolean = false;
   private errored: boolean = false;
+  private playerState: media.AVPlayerState = 'idle';
   private lastPos: number = -1;
   private stallCount: number = 0;
   private lastGoodPos: number = 0;
@@ -88,12 +89,32 @@ export class PlayerModel {
       // 重新登录会产生新 token，旧队列 URL 里的 api_key 会 401（服务端日志 "Invalid token"）
       streamUrl = streamUrl.replace(/api_key=[^&]+/, `api_key=${token}`);
     }
+    // 转码格式按当前菜单设置重写。
+    // aac：Jellyfin 的 AAC 合法封装是 m4a，且必须显式带 transcodingContainer，否则服务端把 AAC 装进 mp3 容器导致转码失败
+    // raw（不转码）：去掉 audioCodec 并抬高价率上限，Jellyfin 直接播放原始文件（FLAC 源即播 FLAC）
+    const codec: string = AppStorage.get<string>('audioCodec') ?? 'mp3';
+    if (codec === 'aac') {
+      streamUrl = streamUrl.replace(/audioCodec=\w+/, 'audioCodec=aac');
+      streamUrl = streamUrl.replace(/container=[^&]+/, 'container=m4a');
+      streamUrl = `${streamUrl}&transcodingContainer=m4a`;
+    } else if (codec === 'raw') {
+      streamUrl = streamUrl.replace(/&audioCodec=\w+/, '');
+      streamUrl = streamUrl.replace(/container=[^&]+/, 'container=flac%2Cmp3%2Cm4a%2Caac');
+      streamUrl = streamUrl.replace(/maxStreamingBitrate=\d+/, 'maxStreamingBitrate=99999999');
+    } else {
+      streamUrl = streamUrl.replace(/audioCodec=\w+/, 'audioCodec=mp3');
+      streamUrl = streamUrl.replace(/container=[^&]+/, 'container=mp3');
+    }
     const t: TrackInfo = tracks[index];
     const p: media.AVPlayer = await media.createAVPlayer();
     this.avPlayer = p;
 /** 播放错误处理：断网引起的错误提示等待恢复；偶发网络错误自动重试最多 2 次（间隔 1.5s）；重试耗尽才报最终错误 */
     p.on('error', (error: BusinessError): void => {
       hilog.error(0x0001, TAG, 'AVPlayer error code=%{public}d msg=%{public}s', error.code, error.message);
+      // 状态操作类错误（如起流窗口内 seek）：非播放故障，忽略以免误触发重试中断播放
+      if (error.code === 5400102) {
+        return;
+      }
       this.isPlaying = false;
       this.errored = true;
       SessionService.updateState(false);
@@ -131,6 +152,7 @@ export class PlayerModel {
       }
     });
     p.on('stateChange', (state: media.AVPlayerState): void => {
+      this.playerState = state;
       if (state === 'initialized') {
         p.prepare();
       } else if (state === 'prepared') {
@@ -355,10 +377,17 @@ export class PlayerModel {
     }
   }
 
-/** 跳转到指定毫秒位置（歌词双击跳转用），同时同步本地进度 */
+/** 跳转到指定毫秒位置（歌词双击跳转用），同时同步本地进度。
+   * 仅在 prepared/playing/paused/completed 状态允许 seek——M4A 转码起流慢，
+   * 起流窗口内 seek 会触发 5400102（Operate Not Permit）错误事件并中断播放 */
   seekTo(ms: number): void {
     const p: media.AVPlayer | null = this.avPlayer;
     if (p === null) {
+      return;
+    }
+    const s: media.AVPlayerState = this.playerState;
+    if (s !== 'prepared' && s !== 'playing' && s !== 'paused' && s !== 'completed') {
+      hilog.warn(0x0001, TAG, 'seekTo ignored in state %{public}s', s);
       return;
     }
     try {

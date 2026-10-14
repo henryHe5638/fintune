@@ -116,7 +116,7 @@ export class JellyfinClient {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Emby-Authorization':
-        'MediaBrowser Client="FinTune", Device="HuaweiWatch6", DeviceId="wristmusic-watch6-001", Version="1.0.0"'
+        `MediaBrowser Client="FinTune", Device="HuaweiWatch", DeviceId="${AppStorage.get<string>('deviceId') ?? 'wristmusic-watch-001'}", Version="1.0.0"`
     };
     if (this.accessToken.length > 0) {
       headers['X-Emby-Token'] = this.accessToken;
@@ -127,7 +127,7 @@ export class JellyfinClient {
         header: headers,
         extraData: extraData,
         connectTimeout: 5000,
-        readTimeout: 12000
+        readTimeout: 30000
       });
       if (resp.responseCode >= 200 && resp.responseCode < 300) {
         return resp.result as string;
@@ -141,8 +141,30 @@ export class JellyfinClient {
     }
   }
 
-/** 探测服务器（System/Info/Public 无需鉴权）：配置页测试连接用 */
-  async getSystemInfo(): Promise<SystemInfo> {
+/** 校验当前 token 是否仍被服务端认可：true=有效；false=401/403 已失效；
+   * 网络错误抛异常（调用方不得视为失效，避免离线时误踢登录）。冷启动预检用 */
+  async verifyToken(userId: string): Promise<boolean> {
+    const httpRequest = http.createHttp();
+    try {
+      const resp = await httpRequest.request(`${this.serverUrl}/Users/${userId}`, {
+        method: http.RequestMethod.GET,
+        header: { 'X-Emby-Token': this.accessToken },
+        connectTimeout: 5000,
+        readTimeout: 8000
+      });
+      if (resp.responseCode === 401 || resp.responseCode === 403) {
+        return false;
+      }
+      if (resp.responseCode >= 200 && resp.responseCode < 300) {
+        return true;
+      }
+      throw new Error(`HTTP ${resp.responseCode}`);
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+/** 探测服务器（System/Info/Public 无需鉴权）：配置页测试连接用 */  async getSystemInfo(): Promise<SystemInfo> {
     const raw = JSON.parse(await this.request('/System/Info/Public', http.RequestMethod.GET)) as RawSystemInfo;
     return { serverName: raw.ServerName ?? '', version: raw.Version ?? '' };
   }

@@ -8,6 +8,8 @@ import { ServerConfigView } from '../views/ServerConfigView';
 import { LoginView } from '../views/LoginView';
 import { LibraryBrowserView } from '../views/LibraryBrowserView';
 import { playerModel } from '../common/PlayerModel';
+import { JellyfinClient } from '../common/JellyfinClient';
+import { promptAction } from '@kit.ArkUI';
 
 @Entry
 @Component
@@ -48,6 +50,23 @@ struct Index {
       this.stage = 'login';
     } else {
       this.stage = 'library';
+      // 冷启动预检 token：服务端撤销/失效时直接引导登录，避免点播才失败
+      this.verifyAuth(this.serverUrl, this.userId, this.accessToken);
+    }
+  }
+
+/** token 预检：401/403 视为失效跳登录；网络错误静默忽略（离线启动不应误踢登录） */
+  private async verifyAuth(serverUrl: string, userId: string, token: string): Promise<void> {
+    try {
+      const c = new JellyfinClient(serverUrl);
+      c.setToken(token);
+      const ok: boolean = await c.verifyToken(userId);
+      if (!ok && this.stage === 'library') {
+        this.stage = 'login';
+        promptAction.showToast({ message: '登录已失效，请重新登录', duration: 3000 });
+      }
+    } catch (error) {
+      // 网络不可达：保持现状，播放侧有自己的弱网处理
     }
   }
 
