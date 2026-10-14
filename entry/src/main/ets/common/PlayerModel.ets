@@ -49,6 +49,8 @@ export class PlayerModel {
   private netLostFlag: boolean = false;
   private errored: boolean = false;
   private playerState: media.AVPlayerState = 'idle';
+  private resuming: boolean = false;
+  private resumeDeadline: number = 0;
   private lastPos: number = -1;
   private stallCount: number = 0;
   private lastGoodPos: number = 0;
@@ -176,16 +178,13 @@ export class PlayerModel {
             target = Math.max(0, d - 3000);
           }
           this.playAfterSeekDone = true;
+          // seek 期间进度冻结是预期行为（网络流 seek 要重新拉取目标位置之前的数据，
+          // 弱网下可能数十秒），看门狗暂停计卡，给 45 秒恢复窗口
+          this.resuming = true;
+          const resumeStart: number = Date.now();
+          this.resumeDeadline = resumeStart + 45000;
           p.seek(target);
           this.positionMs = target;
-          // 兜底：部分网络流不回调 seekDone，1s 后仍未播则直接播，避免卡死在 prepared
-          const st: number = setTimeout(() => {
-            clearTimeout(st);
-            if (this.playAfterSeekDone) {
-              this.playAfterSeekDone = false;
-              p.play();
-            }
-          }, 1000);
         } else {
           p.play();
         }
@@ -198,6 +197,7 @@ export class PlayerModel {
     p.on('seekDone', (): void => {
       if (this.playAfterSeekDone) {
         this.playAfterSeekDone = false;
+        this.resuming = false;
         p.play();
       }
     });
@@ -211,6 +211,7 @@ export class PlayerModel {
     this.queue = tracks;
     this.index = index;
     this.persistNow();
+    this.resuming = false;
     this.trackName = t.name;
     this.artistName = t.artist;
     this.currentId = t.id;
@@ -230,19 +231,37 @@ export class PlayerModel {
       // 说明流已停滞但错误事件还没上来——主动从最后有效位置断点重连，比干等 error 恢复快。
       // 注意：positionMs 为 -1（无效）时不计为卡顿，避免误重连
       if (this.isPlaying && this.trackName.length > 0 && this.positionMs >= 0) {
-        if (this.positionMs === this.lastPos) {
+        // 断点续播 seek 进行中：进度冻结是预期行为，看门狗暂停计卡；
+        // 超过恢复窗口（45 秒）仍未完成才放弃，让看门狗按连接已死处理
+        if (this.resuming) {
+          if (Date.now() > this.resumeDeadline) {
+            this.resuming = false;
+            this.playAfterSeekDone = false;
+          }
+        } else if (this.positionMs === this.lastPos) {
           this.stallCount += 1;
-          // 阈值 3（约 6 秒）：先给播放器缓冲自愈的机会，轻微卡顿不触发重连
+          // 分级响应：冻结 6 秒先提示缓冲中并继续等待（弱网带宽回升大多能自愈，
+          // 重连反而要丢弃全部缓冲且断点越深恢复代价越大）；
+          // 冻结超过 40 秒才判定连接已死，走重连断点续播
           if (this.stallCount >= 3 && this.retryCount < 2 &&
             this.queue.length > 0 && this.index >= 0 && this.lastGoodPos > 0) {
-            this.retryCount += 1;
-            this.stallCount = 0;
-            hilog.warn(0x0001, TAG, 'stall detected, reconnect from %{public}d', this.lastGoodPos);
-            this.errorMsg = '网络波动，自动重试中…';
-            this.requestPlay(this.queue, this.index, this.lastGoodPos);
+            if (this.stallCount < 20) {
+              if (this.errorMsg.length === 0) {
+                this.errorMsg = '缓冲中，等待网络…';
+              }
+            } else {
+              this.retryCount += 1;
+              this.stallCount = 0;
+              hilog.warn(0x0001, TAG, 'stall detected, reconnect from %{public}d', this.lastGoodPos);
+              this.errorMsg = '网络波动，自动重试中…';
+              this.requestPlay(this.queue, this.index, this.lastGoodPos);
+            }
           }
         } else {
           this.stallCount = 0;
+          if (this.errorMsg === '缓冲中，等待网络…') {
+            this.errorMsg = '';
+          }
         }
         this.lastPos = this.positionMs;
       }

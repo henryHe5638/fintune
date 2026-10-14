@@ -12,6 +12,9 @@ import { NetBinder } from './NetBinder';
 
 const TAG: string = 'FinTune';
 
+/** 客户端版本号：与 app.json5 versionName 保持一致（Jellyfin 仪表盘"版本"列显示此值） */
+export const APP_VERSION: string = '1.0.1';
+
 export interface SystemInfo {
   serverName: string;
   version: string;
@@ -116,7 +119,7 @@ export class JellyfinClient {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Emby-Authorization':
-        `MediaBrowser Client="FinTune", Device="HuaweiWatch", DeviceId="${AppStorage.get<string>('deviceId') ?? 'wristmusic-watch-001'}", Version="1.0.0"`
+        `MediaBrowser Client="FinTune", Device="HuaweiWatch", DeviceId="${AppStorage.get<string>('deviceId') ?? 'wristmusic-watch-001'}", Version="${APP_VERSION}"`
     };
     if (this.accessToken.length > 0) {
       headers['X-Emby-Token'] = this.accessToken;
