@@ -227,7 +227,6 @@ struct LyricsPage {
  * 绑定在 NavDestination 上：表冠事件由系统派发给获焦节点（实测焦点常落在 NavDestination 自身），
  * 沿祖先链冒泡；NavDestination 在冒泡链上必能收到，其子孙节点反而收不到（真机/模拟器日志实测）。 */
     .onDigitalCrown((event: CrownEvent): void => {
-      hilog.info(0x0001, 'FinTune', 'crown action=%{public}d degree=%{public}d', event.action, event.degree);
       if (event.action !== CrownAction.UPDATE) {
         return;
       }

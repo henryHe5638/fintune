@@ -15,6 +15,18 @@ const TAG: string = 'FinTune';
 /** 客户端版本号：与 app.json5 versionName 保持一致（Jellyfin 仪表盘"版本"列显示此值） */
 export const APP_VERSION: string = '1.0.1';
 
+/** 构建 Jellyfin 12 要求的 Authorization 头（MediaBrowser scheme，旧版 X-Emby-Token/api_key 已废弃）。
+ * token 为空时仅标识客户端（登录场景），有 token 时携带认证 */
+export function buildAuthHeader(token: string): string {
+  const did: string = AppStorage.get<string>('deviceId') ?? 'wristmusic-watch-001';
+  let header: string =
+    `MediaBrowser Client="FinTune", Device="HuaweiWatch", DeviceId="${did}", Version="${APP_VERSION}"`;
+  if (token.length > 0) {
+    header = `${header}, Token="${token}"`;
+  }
+  return header;
+}
+
 export interface SystemInfo {
   serverName: string;
   version: string;
@@ -118,12 +130,8 @@ export class JellyfinClient {
     const httpRequest = http.createHttp();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'X-Emby-Authorization':
-        `MediaBrowser Client="FinTune", Device="HuaweiWatch", DeviceId="${AppStorage.get<string>('deviceId') ?? 'wristmusic-watch-001'}", Version="${APP_VERSION}"`
+      'Authorization': buildAuthHeader(this.accessToken)
     };
-    if (this.accessToken.length > 0) {
-      headers['X-Emby-Token'] = this.accessToken;
-    }
     try {
       const resp = await httpRequest.request(this.serverUrl + path, {
         method: method,
@@ -151,7 +159,7 @@ export class JellyfinClient {
     try {
       const resp = await httpRequest.request(`${this.serverUrl}/Users/${userId}`, {
         method: http.RequestMethod.GET,
-        header: { 'X-Emby-Token': this.accessToken },
+        header: { 'Authorization': buildAuthHeader(this.accessToken) },
         connectTimeout: 5000,
         readTimeout: 8000
       });

@@ -139,8 +139,8 @@ export struct BrowsePage {
 
   private buildTrackUrl(id: string): string {
     const container: string = encodeURIComponent('mp3,aac|mp3,aac');
-    return `${this.serverUrl}/Audio/${id}/universal?userId=${this.userId}&api_key=${this.accessToken}` +
-      `&container=${container}&audioCodec=mp3&maxStreamingBitrate=${this.maxBitrate}`;
+    return `${this.serverUrl}/Audio/${id}/universal?container=${container}` +
+      `&audioCodec=mp3&maxStreamingBitrate=${this.maxBitrate}`;
   }
 
   private savePlayState(tracks: TrackInfo[], index: number): void {

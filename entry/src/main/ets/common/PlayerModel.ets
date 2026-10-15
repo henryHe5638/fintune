@@ -12,6 +12,7 @@ import { CtxHolder } from './CtxHolder';
 import { SessionService } from './SessionService';
 import { NetBinder } from './NetBinder';
 import { AppConfig } from './AppConfig';
+import { buildAuthHeader } from './JellyfinClient';
 
 const TAG: string = 'FinTune';
 
@@ -51,6 +52,7 @@ export class PlayerModel {
   private playerState: media.AVPlayerState = 'idle';
   private resuming: boolean = false;
   private resumeDeadline: number = 0;
+  private playAttemptAt: number = 0;
   private lastPos: number = -1;
   private stallCount: number = 0;
   private lastGoodPos: number = 0;
@@ -75,30 +77,27 @@ export class PlayerModel {
    * 时长兜底：AVPlayer 对 Jellyfin 转码流返回的 duration 不可靠（实测出现过 134217400 的垃圾值），
    * 不合理时改用曲目自带的 durationMs（Jellyfin RunTimeTicks 换算）。 */
   private async doPlay(tracks: TrackInfo[], index: number, resumeFrom: number): Promise<void> {
+    this.playAttemptAt = Date.now();
     const t0: TrackInfo = tracks[index];
-    // 起流前确保已绑定到最优网络（Wi-Fi 优先），避免恢复播放/冷启动路径从未绑网而走蓝牙代理；
-    // 传流地址用于判断服务器是否在内网——公网服务器会跳过"带感叹号"的不可用 Wi-Fi
-    await NetBinder.bindBest(t0.url);
-    await this.releasePlayer();
-    this.errorMsg = '';
-    this.errored = false;
-    // 队列 URL 是点歌时按当时码率/token 烘焙的；起流时按当前设置重写，
-    // 菜单切码率或重新登录换 token 后无需重新点歌，下一首/自动重连即生效
+    // 队列 URL 是点歌时烘焙的；起流时按当前设置重写，菜单切码率/格式后无需重新点歌。
+    // Jellyfin 12 起 api_key 查询参数认证已废弃（legacy authorization disabled），
+    // 认证改走 Authorization 请求头（StreamLoader 应用层拉流携带）
     const bm: number = AppStorage.get<number>('maxBitrate') ?? 128000;
     const token: string = AppStorage.get<string>('accessToken') ?? '';
-    let streamUrl: string = t0.url.replace(/maxStreamingBitrate=\d+/, `maxStreamingBitrate=${bm}`);
-    if (token.length > 0) {
-      // 重新登录会产生新 token，旧队列 URL 里的 api_key 会 401（服务端日志 "Invalid token"）
-      streamUrl = streamUrl.replace(/api_key=[^&]+/, `api_key=${token}`);
-    }
+    let streamUrl: string = t0.url.replace(/[?&]userId=[^&]+&/, '?');
+    streamUrl = streamUrl.replace(/[?&]api_key=[^&]+&/, '?');
+    streamUrl = streamUrl.replace(/maxStreamingBitrate=\d+/, `maxStreamingBitrate=${bm}`);
     // 转码格式按当前菜单设置重写。
-    // aac：Jellyfin 的 AAC 合法封装是 m4a，且必须显式带 transcodingContainer，否则服务端把 AAC 装进 mp3 容器导致转码失败
+    // aac：用 ADTS 裸流（transcodingContainer=aac）——Jellyfin 12 的 m4a 转码是 delay_moov，
+    // moov 在文件末尾，鸿蒙解复用器要读到 moov 才认容器（等于下完整首歌才能播，实测 5400106 墙）；
+    // ADTS 无 moov 概念，随到随解。m4a 封装虽官方支持但起流慢，弃用。
     // raw（不转码）：去掉 audioCodec 并抬高价率上限，Jellyfin 直接播放原始文件（FLAC 源即播 FLAC）
     const codec: string = AppStorage.get<string>('audioCodec') ?? 'mp3';
     if (codec === 'aac') {
       streamUrl = streamUrl.replace(/audioCodec=\w+/, 'audioCodec=aac');
-      streamUrl = streamUrl.replace(/container=[^&]+/, 'container=m4a');
-      streamUrl = `${streamUrl}&transcodingContainer=m4a`;
+      streamUrl = streamUrl.replace(/container=[^&]+/, 'container=aac');
+      streamUrl = streamUrl.replace(/&transcodingContainer=[^&]+/, '');
+      streamUrl = `${streamUrl}&transcodingContainer=aac`;
     } else if (codec === 'raw') {
       streamUrl = streamUrl.replace(/&audioCodec=\w+/, '');
       streamUrl = streamUrl.replace(/container=[^&]+/, 'container=flac%2Cmp3%2Cm4a%2Caac');
@@ -107,6 +106,12 @@ export class PlayerModel {
       streamUrl = streamUrl.replace(/audioCodec=\w+/, 'audioCodec=mp3');
       streamUrl = streamUrl.replace(/container=[^&]+/, 'container=mp3');
     }
+    // 起流前确保已绑定到最优网络（Wi-Fi 优先），避免恢复播放/冷启动路径从未绑网而走蓝牙代理；
+    // 传流地址用于判断服务器是否在内网——公网服务器会跳过"带感叹号"的不可用 Wi-Fi
+    await NetBinder.bindBest(t0.url);
+    await this.releasePlayer();
+    this.errorMsg = '';
+    this.errored = false;
     const t: TrackInfo = tracks[index];
     const p: media.AVPlayer = await media.createAVPlayer();
     this.avPlayer = p;
@@ -132,7 +137,13 @@ export class PlayerModel {
         this.errorMsg = '网络断开，恢复后自动继续';
         return;
       }
-      if (this.retryCount < 2 && this.queue.length > 0 && this.index >= 0) {
+      // 转码（AAC/m4a）失败时保守重试：每次重试都会在服务端新建一个转码任务，
+      // 频繁重试会刷屏且无用——最多 1 次、间隔 4 秒；直出（MP3/原始）保持 2 次 1.5 秒
+      const codec: string = AppStorage.get<string>('audioCodec') ?? 'mp3';
+      const isTranscode: boolean = codec === 'aac';
+      const maxRetry: number = isTranscode ? 1 : 2;
+      const retryDelay: number = isTranscode ? 4000 : 1500;
+      if (this.retryCount < maxRetry && this.queue.length > 0 && this.index >= 0) {
         this.retryCount += 1;
         this.errorMsg = '网络波动，自动重试中…';
         // currentTime 异常时回退到最后有效进度，避免从头播放
@@ -140,15 +151,11 @@ export class PlayerModel {
           (this.lastGoodPos > 0 ? this.lastGoodPos : -1);
         const t: number = setTimeout(() => {
           clearTimeout(t);
-          if (this.retryCount >= 2) {
-            // 最后一次重试前先降网兜底（Wi-Fi 不通时切蜂窝/默认网），避免死绑在不可用的 Wi-Fi 上
-            NetBinder.bindFallback().then((): void => {
-              this.requestPlay(this.queue, this.index, resumePos);
-            });
-          } else {
+          // 最后一次重试前先降网兜底（Wi-Fi 不通时切蜂窝/默认网），避免死绑在不可用的 Wi-Fi 上
+          NetBinder.bindFallback().then((): void => {
             this.requestPlay(this.queue, this.index, resumePos);
-          }
-        }, 1500);
+          });
+        }, retryDelay);
       } else {
         this.errorMsg = '播放出错，请重试';
       }
@@ -158,7 +165,9 @@ export class PlayerModel {
       if (state === 'initialized') {
         p.prepare();
       } else if (state === 'prepared') {
-        this.retryCount = 0;
+        // 注意：不要在这里清零 retryCount——prepared 只代表转码任务建立，
+        // 之后引擎下载仍可能失败；在此清零会导致"prepared→失败→重试"无限循环、
+        // 每次重试都在服务端新建转码任务。改到真正 playing 时清零（见下）
         this.errored = false;
         this.errorMsg = '';
         this.stallCount = 0;
@@ -187,6 +196,12 @@ export class PlayerModel {
           this.positionMs = target;
         } else {
           p.play();
+        }
+      } else if (state === 'playing') {
+        // 真正出声音才清零重试计数：prepared 只是起流成功，不代表能播完
+        this.retryCount = 0;
+        if (this.errorMsg === '缓冲中，等待网络…') {
+          this.errorMsg = '';
         }
       } else if (state === 'completed') {
         this.isPlaying = false;
@@ -266,7 +281,9 @@ export class PlayerModel {
         this.lastPos = this.positionMs;
       }
     }, 2000);
-    p.url = streamUrl;
+    const src: media.MediaSource = media.createMediaSourceWithUrl(streamUrl,
+      { 'Authorization': buildAuthHeader(token) });
+    await p.setMediaSource(src);
 /** 挂接网络断开/恢复回调：断网暂停并提示，恢复后自动续播当前曲目 */
     NetBinder.onLost = (): void => {
       this.netLostFlag = true;
@@ -274,6 +291,11 @@ export class PlayerModel {
       this.errorMsg = '网络断开，恢复后自动继续';
     };
     NetBinder.onAvailable = (): void => {
+      // 去抖：网络事件可能连续抖动，起流尝试 8 秒内的重复续播直接忽略——
+      // 否则每次 onAvailable 都会杀掉正在 prepare 的实例重建（M4A 转码起流慢必死）
+      if (Date.now() - this.playAttemptAt < 8000) {
+        return;
+      }
       if (this.netLostFlag) {
         this.netLostFlag = false;
         this.errorMsg = '';

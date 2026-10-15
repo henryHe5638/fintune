@@ -12,7 +12,8 @@
 
 - 官网：https://jellyfin.org
 - 服务端支持 Windows / macOS / Linux / Docker / 群晖等 NAS，安装包见[官方下载页](https://jellyfin.org/downloads)
-- 本项目通过 Jellyfin 的 REST API 浏览曲库，并请求服务端转码流（MP3 128k）实现手表边下边播；服务器既可以是局域网 NAS，也可以是经公网代理（反代 / 内网穿透）暴露的服务器
+- **兼容性**：支持 Jellyfin 10.8 ~ 12.x。Jellyfin 12.0 起服务端默认禁用旧版认证（api_key 查询参数 / X-Emby-Token 头），本项目已适配新版 `Authorization` 头认证
+- 本项目通过 Jellyfin 的 REST API 浏览曲库，并请求服务端转码流（MP3 / AAC 可选码率）实现手表边下边播；服务器既可以是局域网 NAS，也可以是经公网代理（反代 / 内网穿透）暴露的服务器
 
 ## 功能
 
@@ -92,7 +93,6 @@ Jellyfin 账密登录（token 自动获取与持久化）：
 
 ## 已知限制
 
-- 歌词页表冠滚动在部分 ROM 上仍不可用（触控滑动正常），系系统对表冠事件分发的限制
 - 实体按键（下键/表冠按下）被系统 sceneboard 作为功能键拦截（真机 hilog 实测，keyOptions:2078），不会派发给应用，无法做"按键确认选中"；列表确认目前只能触控点选
 - 蜂窝网络下无法直接访问局域网 NAS（物理限制），仅 Wi-Fi 环境可播；如需蜂窝/外网访问，可自行搭建公网代理（反向代理、内网穿透等，如 Nginx Proxy Manager、frp、Cloudflare Tunnel），在服务器地址中填写公网域名即可
 - 锻炼 App 运动界面的三方播控能力待真机验证

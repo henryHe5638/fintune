@@ -128,10 +128,10 @@ export struct LibraryBrowserView {
     // Jellyfin 通用转码端点：container 声明可直出的格式（直出优先），audioCodec=mp3 让服务器
     // 统一转码为 MP3 渐进流（audio/mpeg）。不要加 transcodingProtocol=hls —— 返回的 HLS
     // master playlist 在鸿蒙媒体引擎上报 5400106 Unsupported Format（实测坑）。
-    // token 只能走 api_key query（AVPlayer 播放网络 URL 无法带自定义请求头）。
+    // Jellyfin 12 起 api_key 查询参数认证已废弃，认证走 Authorization 头（PlayerModel 起流时携带）
     const container: string = encodeURIComponent('mp3,aac|mp3,aac');
-    return `${this.serverUrl}/Audio/${id}/universal?userId=${this.userId}&api_key=${this.accessToken}` +
-      `&container=${container}&audioCodec=mp3&maxStreamingBitrate=${this.maxBitrate}`;
+    return `${this.serverUrl}/Audio/${id}/universal?container=${container}` +
+      `&audioCodec=mp3&maxStreamingBitrate=${this.maxBitrate}`;
   }
 
 /** 首页条目点击：歌曲=构建队列播放；文件夹=push browse 路由页（进入子文件夹） */

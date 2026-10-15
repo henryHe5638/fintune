@@ -7,6 +7,9 @@
 import { audio } from '@kit.AudioKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { playerModel, PlayerModel, TrackInfo } from '../common/PlayerModel';
+import { buildAuthHeader } from '../common/JellyfinClient';
+import { http } from '@kit.NetworkKit';
+import { image } from '@kit.ImageKit';
 
 @Component
 struct PlayerPage {
@@ -21,6 +24,7 @@ struct PlayerPage {
   @State ringDur: number = 1;
   @State coverFail: boolean = false;
   @State coverRetry: number = 0;
+  @State coverPixelMap: image.PixelMap | null = null;
   private navStack: NavPathStack = new NavPathStack();
   private uiTicker: number = -1;
   private audioMgr: audio.AudioManager = audio.getAudioManager();
@@ -79,6 +83,8 @@ struct PlayerPage {
         this.lastTrackId = playerModel.currentId;
         this.coverFail = false;
         this.coverRetry = 0;
+        this.coverPixelMap = null;
+        this.loadCover();
       }
     }, 1000);
   }
@@ -90,12 +96,44 @@ struct PlayerPage {
     }
   }
 
-/** 封面图地址（Jellyfin 专辑图接口，token 走 query）。带 r 参数用于加载失败重试时强制重新请求 */
+/** 封面图地址（Jellyfin 专辑图接口）。Jellyfin 12 起 api_key 废弃，改走 http+Authorization 头下载为 PixelMap */
   private coverUrl(): string {
     if (this.player.currentId.length === 0) {
       return '';
     }
-    return `${this.serverUrl}/Items/${this.player.currentId}/Images/Primary?api_key=${this.accessToken}&maxWidth=300&quality=90&r=${this.coverRetry}`;
+    return `${this.serverUrl}/Items/${this.player.currentId}/Images/Primary?maxWidth=300&quality=90`;
+  }
+
+/** 带认证头下载封面并转为 PixelMap（Image 组件无法携带自定义请求头，Jellyfin 12 起必须头认证）。
+   * 切歌时由 uiTicker 触发；失败重试 2 次后显示占位图标 */
+  private async loadCover(): Promise<void> {
+    if (this.player.currentId.length === 0 || this.coverRetry >= 3) {
+      if (this.coverRetry >= 3) {
+        this.coverFail = true;
+      }
+      return;
+    }
+    const url: string = `${this.coverUrl()}&r=${this.coverRetry}`;
+    try {
+      const req: http.HttpRequest = http.createHttp();
+      const resp: http.HttpResponse = await req.request(url, {
+        method: http.RequestMethod.GET,
+        header: { 'Authorization': buildAuthHeader(this.accessToken) },
+        connectTimeout: 6000,
+        readTimeout: 10000,
+        expectDataType: http.HttpDataType.ARRAY_BUFFER
+      });
+      if (resp.responseCode >= 200 && resp.responseCode < 300) {
+        const buf: ArrayBuffer = resp.result as ArrayBuffer;
+        const src: image.ImageSource = image.createImageSource(buf);
+        const pm: image.PixelMap = await src.createPixelMap();
+        this.coverPixelMap = pm;
+      } else {
+        this.coverRetry += 1;
+      }
+    } catch (error) {
+      this.coverRetry += 1;
+    }
   }
 
 /** 进度环描边：用 Circle 的 strokeDashArray 画圆弧（Progress 组件参数不保证响应式更新，
@@ -327,19 +365,26 @@ struct PlayerPage {
               .justifyContent(FlexAlign.Center)
               .backgroundColor('#1AFFFFFF')
             } else {
-              Image(this.coverUrl())
+              if (this.coverPixelMap !== null) {
+                Image(this.coverPixelMap)
+                  .width(80)
+                  .height(80)
+                  .borderRadius(40)
+                  .border({ width: 1, color: '#33FFFFFF' })
+                  .shadow({ radius: 18, color: '#4DFFFFFF', offsetY: 0 })
+              } else {
+                Column() {
+                  Image($r('app.media.note_icon'))
+                    .width(30)
+                    .height(30)
+                    .opacity(0.5)
+                }
                 .width(80)
                 .height(80)
                 .borderRadius(40)
-                .border({ width: 1, color: '#33FFFFFF' })
-                .shadow({ radius: 18, color: '#4DFFFFFF', offsetY: 0 })
-                .onError(() => {
-                  if (this.coverRetry < 2) {
-                    this.coverRetry += 1;
-                  } else {
-                    this.coverFail = true;
-                  }
-                })
+                .justifyContent(FlexAlign.Center)
+                .backgroundColor('#1AFFFFFF')
+              }
             }
             Button() {
               SymbolGlyph(this.player.isPlaying ? $r('sys.symbol.pause') : $r('sys.symbol.play_fill'))
