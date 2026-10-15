@@ -13,7 +13,7 @@ import { NetBinder } from './NetBinder';
 const TAG: string = 'FinTune';
 
 /** 客户端版本号：与 app.json5 versionName 保持一致（Jellyfin 仪表盘"版本"列显示此值） */
-export const APP_VERSION: string = '1.0.1';
+export const APP_VERSION: string = '1.1.0';
 
 /** 构建 Jellyfin 12 要求的 Authorization 头（MediaBrowser scheme，旧版 X-Emby-Token/api_key 已废弃）。
  * token 为空时仅标识客户端（登录场景），有 token 时携带认证 */
