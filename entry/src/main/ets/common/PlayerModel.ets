@@ -57,6 +57,9 @@ export class PlayerModel {
   private stallCount: number = 0;
   private lastGoodPos: number = 0;
   private playAfterSeekDone: boolean = false;
+  private seekTarget: number = -1;
+  private resumeViaTicks: boolean = false;
+  private timeOffset: number = 0;
 
 /** 播放入口：把切歌请求串进 Promise 链，保证快速连点时旧播放器一定先释放，不会多首同时播 */
   /**
@@ -106,6 +109,15 @@ export class PlayerModel {
       streamUrl = streamUrl.replace(/audioCodec=\w+/, 'audioCodec=mp3');
       streamUrl = streamUrl.replace(/container=[^&]+/, 'container=mp3');
     }
+    // seek 失败的兜底重连：转码流本质是不可随机访问的线性 HTTP 流，seek 常静默失败被拉回 0，
+    // 改用 Jellyfin 官方 StartTimeTicks 参数让服务端直接从断点起转码，客户端从 0 播即可
+    let startTicks: number = 0;
+    if (this.resumeViaTicks && resumeFrom > 0) {
+      startTicks = resumeFrom * 10000;
+      streamUrl = `${streamUrl}&StartTimeTicks=${startTicks}`;
+    }
+    this.resumeViaTicks = false;
+    this.timeOffset = startTicks > 0 ? resumeFrom : 0;
     // 起流前确保已绑定到最优网络（Wi-Fi 优先），避免恢复播放/冷启动路径从未绑网而走蓝牙代理；
     // 传流地址用于判断服务器是否在内网——公网服务器会跳过"带感叹号"的不可用 Wi-Fi
     await NetBinder.bindBest(t0.url);
@@ -149,6 +161,8 @@ export class PlayerModel {
         // currentTime 异常时回退到最后有效进度，避免从头播放
         const resumePos: number = this.positionMs > 0 ? this.positionMs :
           (this.lastGoodPos > 0 ? this.lastGoodPos : -1);
+        hilog.warn(0x0001, TAG, 'error retry %{public}d from pos=%{public}d (code=%{public}d)',
+          this.retryCount, resumePos, error.code);
         const t: number = setTimeout(() => {
           clearTimeout(t);
           // 最后一次重试前先降网兜底（Wi-Fi 不通时切蜂窝/默认网），避免死绑在不可用的 Wi-Fi 上
@@ -181,7 +195,10 @@ export class PlayerModel {
         SessionService.updateMetadata(this.currentId, this.trackName, this.artistName, this.durationMs);
         // 断点续播：弱网重试/恢复时先 seek 回上次位置，等 seekDone 再 play——
         // play 抢在 seek 生效前会导致网络流从头播放（实测"卡回开头"的根因）
-        if (resumeFrom > 0) {
+        if (startTicks > 0) {
+          // StartTimeTicks 兜底：服务端已从断点起流，直接播放，不再 seek
+          p.play();
+        } else if (resumeFrom > 0) {
           let target: number = resumeFrom;
           if (d > 3000 && target > d - 3000) {
             target = Math.max(0, d - 3000);
@@ -192,6 +209,7 @@ export class PlayerModel {
           this.resuming = true;
           const resumeStart: number = Date.now();
           this.resumeDeadline = resumeStart + 45000;
+          this.seekTarget = target;
           p.seek(target);
           this.positionMs = target;
         } else {
@@ -208,19 +226,34 @@ export class PlayerModel {
         this.advance(true);
       }
     });
-/** seek 完成回调：断点续播等 seek 落位后再开始播放 */
+/** seek 完成回调：断点续播等 seek 落位后再开始播放。
+    * 校验实际落位：Jellyfin 转码流是不可随机访问的线性流，弱网下 seek 常静默失败被拉回 0，
+    * seekDone 照样回调——不校验就会从头播放（"正常播着突然回开头"的根因） */
     p.on('seekDone', (): void => {
       if (this.playAfterSeekDone) {
         this.playAfterSeekDone = false;
         this.resuming = false;
+        const target: number = this.seekTarget;
+        this.seekTarget = -1;
+        const actual: number = p.currentTime;
+        hilog.info(0x0001, TAG, 'seekDone target=%{public}d actual=%{public}d', target, actual);
+        if (target > 0 && (actual < 0 || Math.abs(actual - target) > 5000) &&
+          this.queue.length > 0 && this.index >= 0) {
+          // seek 未落位：改用 StartTimeTicks 重建流，让服务端从断点起转码
+          hilog.warn(0x0001, TAG, 'seek missed, restart via StartTimeTicks from %{public}d', target);
+          this.resumeViaTicks = true;
+          this.requestPlay(this.queue, this.index, target);
+          return;
+        }
         p.play();
       }
     });
 /** 系统每约 100ms 上报一次播放进度；按 500ms 阈值节流后再写入 @Observed 字段，
      * 避免 10Hz 的状态通知触发全 UI 重渲染（手表功耗敏感） */
     p.on('timeUpdate', (t: number): void => {
-      if (Math.abs(t - this.positionMs) >= 500) {
-        this.positionMs = t;
+      const pos: number = t >= 0 ? t + this.timeOffset : t;
+      if (Math.abs(pos - this.positionMs) >= 500) {
+        this.positionMs = pos;
       }
     });
     this.queue = tracks;
@@ -236,7 +269,9 @@ export class PlayerModel {
     this.ticker = setInterval(() => {
       const cur: media.AVPlayer | null = this.avPlayer;
       if (cur !== null) {
-        this.positionMs = cur.currentTime;
+        const raw: number = cur.currentTime;
+        // StartTimeTicks 兜底起流后引擎时间轴从 0 计，加偏移还原真实进度
+        this.positionMs = raw >= 0 ? raw + this.timeOffset : raw;
       }
       // currentTime 在卡顿/缓冲瞬间可能返回 -1，不能用作断点；记录已知的最大有效进度
       if (this.positionMs >= 0 && this.positionMs > this.lastGoodPos) {
